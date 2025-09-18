@@ -86,8 +86,15 @@ st.header("1️⃣ Performance Analysis")
 df["ICICI_%Change"] = df["ICICI_Price"].pct_change()
 df["Nifty_%Change"] = df["Nifty_Price"].pct_change()
 
-fig1 = px.line(df, x=df.index, y=["ICICI_Price", "Nifty_Price"],
-               title="ICICI vs Nifty Prices")
+# Reset index for Plotly charts
+df_reset = df.reset_index()
+
+fig1 = px.line(
+    df_reset, 
+    x="Date", 
+    y=["ICICI_Price", "Nifty_Price"],
+    title="ICICI vs Nifty Prices"
+)
 st.plotly_chart(fig1, use_container_width=True)
 
 st.write("**Stats:**")
@@ -114,8 +121,10 @@ alpha, beta = model.params
 st.write(f"Sharpe Ratio: {sharpe:.3f}, Sortino Ratio: {sortino:.3f}")
 st.write(f"Alpha: {alpha:.4f}, Beta: {beta:.3f}")
 
-fig2 = px.scatter(x=df["Nifty_%Change"], y=df["ICICI_%Change"],
-                  trendline="ols", title="Regression: ICICI vs Nifty")
+fig2 = px.scatter(
+    df_reset, x="Nifty_%Change", y="ICICI_%Change",
+    trendline="ols", title="Regression: ICICI vs Nifty"
+)
 st.plotly_chart(fig2, use_container_width=True)
 
 # ==========================
@@ -173,11 +182,10 @@ if alm_file:
 # ==========================
 st.header("6️⃣ Portfolio Simulation")
 
-sims = []
-for _ in range(10000):
-    sim_return = np.random.normal(df["ICICI_%Change"].mean(),
-                                  df["ICICI_%Change"].std())
-    sims.append(sim_return)
+sims = np.random.normal(df["ICICI_%Change"].mean(),
+                        df["ICICI_%Change"].std(),
+                        10000)
+
 fig3 = px.histogram(sims, nbins=50, title="Monte Carlo Portfolio Returns")
 st.plotly_chart(fig3, use_container_width=True)
 
@@ -190,4 +198,3 @@ output = io.BytesIO()
 df.to_excel(output)
 st.download_button("Download Processed Data", data=output.getvalue(),
                    file_name="processed_icici.xlsx")
-
