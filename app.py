@@ -59,8 +59,7 @@ def historical_var(returns, conf=0.95):
     r = pd.Series(returns).dropna().values
     if r.size == 0:
         return np.nan
-    q = np.percentile(r, (1 - conf) * 100)
-    return q
+    return np.percentile(r, (1 - conf) * 100)
 
 def parametric_var(returns, conf=0.95):
     r = pd.Series(returns).dropna().values
@@ -69,7 +68,7 @@ def parametric_var(returns, conf=0.95):
     mu, sigma = r.mean(), r.std(ddof=1)
     if np.isnan(mu) or np.isnan(sigma):
         return np.nan
-    # VaR is typically the lower tail quantile; return a (negative) return threshold
+    # lower-tail threshold at the chosen confidence
     return mu - sigma * norm.ppf(conf)
 
 def monte_carlo_var(S0, mu, sigma, T, n=10000, conf=0.95):
@@ -110,7 +109,7 @@ df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 df = df.dropna(subset=["Date"]).sort_values("Date").reset_index(drop=True)
 df = df.set_index("Date")
 
-# ---- Filters ----
+# ---- Sidebar Filters & Parameters ----
 st.sidebar.header("Filters")
 min_d, max_d = df.index.min(), df.index.max()
 date_range = st.sidebar.date_input("Select Date Range", [min_d, max_d])
@@ -124,12 +123,19 @@ if df.empty:
     st.warning("No data in the selected range. Adjust filters.")
     st.stop()
 
-# Editable parameters
 st.sidebar.subheader("Parameters")
 notional = st.sidebar.number_input("Notional Value", min_value=0.0, value=10000.0, step=100.0)
 risk_free = st.sidebar.slider("Risk-Free Rate (%)", 0.0, 10.0, 5.0) / 100.0
 volatility_ui = st.sidebar.slider("Volatility (%)", 0.0, 100.0, 30.0) / 100.0
 time_horizon = st.sidebar.slider("Time Horizon (Years)", 0.1, 5.0, 1.0)
+
+# 🔒 Global VaR confidence used everywhere
+conf = st.sidebar.select_slider(
+    "VaR Confidence Level",
+    options=[0.90, 0.95, 0.99],
+    value=0.95,
+    format_func=lambda x: f"{int(x*100)}%"
+)
 
 # ==========================
 # 1. Performance Analysis
@@ -150,7 +156,7 @@ else:
 df["ICICI_%Change"] = icici_ret
 df["Nifty_%Change"] = nifty_ret
 
-# Price chart (use reset_index + x="Date")
+# Price chart
 df_reset = df.reset_index()
 fig1 = px.line(
     df_reset,
@@ -160,7 +166,7 @@ fig1 = px.line(
 )
 st.plotly_chart(fig1, use_container_width=True)
 
-# Cumulative return chart (optional, robust)
+# Cumulative returns
 cum_df = pd.DataFrame({
     "Date": df_reset["Date"],
     "ICICI_CumRet": (1 + df["ICICI_%Change"].fillna(0)).cumprod().values - 1,
@@ -191,7 +197,7 @@ down_std = safe_std(downside)
 sharpe = np.sqrt(252.0) * safe_div(excess_mean, excess_std)
 sortino = np.sqrt(252.0) * safe_div(excess_mean, down_std)
 
-# Beta & Alpha (robust)
+# Beta & Alpha
 reg_df = df[["ICICI_%Change", "Nifty_%Change"]].dropna()
 alpha = beta = np.nan
 if not reg_df.empty and reg_df["Nifty_%Change"].nunique() > 1:
@@ -208,7 +214,7 @@ if not reg_df.empty and reg_df["Nifty_%Change"].nunique() > 1:
 st.write(f"**Sharpe Ratio:** {sharpe:.3f} | **Sortino Ratio:** {sortino:.3f}")
 st.write(f"**Alpha:** {alpha:.6f} | **Beta:** {beta:.4f}")
 
-# Regression scatter (use cleaned reg_df)
+# Regression scatter
 if not reg_df.empty:
     fig2 = px.scatter(reg_df.reset_index(), x="Nifty_%Change", y="ICICI_%Change",
                       trendline="ols", title="Regression: ICICI vs Nifty (daily returns)")
@@ -220,7 +226,6 @@ else:
 # 3. Value at Risk
 # ==========================
 st.header("3️⃣ Value at Risk (VaR)")
-conf = st.slider("Confidence Level", 0.90, 0.99, 0.95)
 
 hist_var_val = historical_var(df["ICICI_%Change"], conf)
 param_var_val = parametric_var(df["ICICI_%Change"], conf)
@@ -233,6 +238,7 @@ mc_var_val = monte_carlo_var(
     conf=conf
 )
 
+st.write(f"**Confidence:** {int(conf*100)}%")
 st.write(f"**Historical VaR (return):** {hist_var_val:.2%}")
 st.write(f"**Parametric VaR (return):** {param_var_val:.2%}")
 st.write(f"**Monte Carlo VaR (return over {time_horizon:.2f}y):** {mc_var_val:.2%}")
@@ -288,6 +294,17 @@ if not np.isnan(mu_sim) and not np.isnan(sigma_sim) and sigma_sim >= 0:
     sims = np.random.normal(mu_sim, sigma_sim, n_sims)
     sim_df = pd.DataFrame({"Simulated Returns": sims})
     fig3 = px.histogram(sim_df, x="Simulated Returns", nbins=50, title="Monte Carlo Portfolio Returns (daily)")
+
+    # 🔎 Overlay selected-confidence daily Parametric VaR as a vertical line
+    if not np.isnan(param_var_val):
+        fig3.add_vline(
+            x=float(param_var_val),
+            line_dash="dash",
+            line_color="red",
+            annotation_text=f"VaR {int(conf*100)}%",
+            annotation_position="top right"
+        )
+
     st.plotly_chart(fig3, use_container_width=True)
     st.write(f"**Probability of loss (daily):** {(sim_df['Simulated Returns'] < 0).mean():.2%}")
 else:
