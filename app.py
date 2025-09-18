@@ -90,8 +90,8 @@ df["Nifty_%Change"] = df["Nifty_Price"].pct_change()
 df_reset = df.reset_index()
 
 fig1 = px.line(
-    df_reset, 
-    x="Date", 
+    df_reset,
+    x="Date",
     y=["ICICI_Price", "Nifty_Price"],
     title="ICICI vs Nifty Prices"
 )
@@ -109,12 +109,13 @@ st.header("2️⃣ Risk-Return Analysis")
 rf = risk_free / 252
 excess_returns = df["ICICI_%Change"] - rf
 sharpe = np.sqrt(252) * excess_returns.mean() / excess_returns.std()
-downside = df["ICICI_%Change"][df["ICICI_%Change"]<0]
+downside = df["ICICI_%Change"][df["ICICI_%Change"] < 0]
 sortino = np.sqrt(252) * excess_returns.mean() / downside.std()
 
-# Beta & Alpha
-X = add_constant(df["Nifty_%Change"].dropna())
-y = df["ICICI_%Change"].dropna()
+# Beta & Alpha (fix alignment issue)
+reg_df = df[["ICICI_%Change", "Nifty_%Change"]].dropna()
+X = add_constant(reg_df["Nifty_%Change"])
+y = reg_df["ICICI_%Change"]
 model = OLS(y, X).fit()
 alpha, beta = model.params
 
@@ -122,7 +123,7 @@ st.write(f"Sharpe Ratio: {sharpe:.3f}, Sortino Ratio: {sortino:.3f}")
 st.write(f"Alpha: {alpha:.4f}, Beta: {beta:.3f}")
 
 fig2 = px.scatter(
-    df_reset, x="Nifty_%Change", y="ICICI_%Change",
+    reg_df, x="Nifty_%Change", y="ICICI_%Change",
     trendline="ols", title="Regression: ICICI vs Nifty"
 )
 st.plotly_chart(fig2, use_container_width=True)
