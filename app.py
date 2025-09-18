@@ -2,11 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import matplotlib.pyplot as plt
-import seaborn as sns
 from scipy.stats import norm
 from statsmodels.api import OLS, add_constant
-from math import log, sqrt, exp
 import io
 
 # ----------------------------
@@ -51,7 +48,6 @@ def monte_carlo_var(S0, mu, sigma, T, n=10000, conf=0.95):
 # Streamlit UI
 # ----------------------------
 st.set_page_config(page_title="ICICI Risk Dashboard", layout="wide")
-
 st.title("📊 ICICI Bank Risk & Portfolio Dashboard")
 
 # ---- File Upload ----
@@ -85,34 +81,28 @@ st.header("1️⃣ Performance Analysis")
 
 df["ICICI_%Change"] = df["ICICI_Price"].pct_change()
 df["Nifty_%Change"] = df["Nifty_Price"].pct_change()
-
-# Reset index for Plotly charts
 df_reset = df.reset_index()
 
-fig1 = px.line(
-    df_reset,
-    x="Date",
-    y=["ICICI_Price", "Nifty_Price"],
-    title="ICICI vs Nifty Prices"
-)
+fig1 = px.line(df_reset, x="Date",
+               y=["ICICI_Price", "Nifty_Price"],
+               title="ICICI vs Nifty Prices")
 st.plotly_chart(fig1, use_container_width=True)
 
 st.write("**Stats:**")
-st.write(df[["ICICI_%Change", "Nifty_%Change"]].agg(["mean","var","std"]))
+st.write(df[["ICICI_%Change", "Nifty_%Change"]].agg(["mean", "var", "std"]))
 
 # ==========================
 # 2. Risk-Return Analysis
 # ==========================
 st.header("2️⃣ Risk-Return Analysis")
 
-# Sharpe & Sortino
 rf = risk_free / 252
 excess_returns = df["ICICI_%Change"] - rf
 sharpe = np.sqrt(252) * excess_returns.mean() / excess_returns.std()
 downside = df["ICICI_%Change"][df["ICICI_%Change"] < 0]
 sortino = np.sqrt(252) * excess_returns.mean() / downside.std()
 
-# Beta & Alpha (fix alignment issue)
+# Align data for regression
 reg_df = df[["ICICI_%Change", "Nifty_%Change"]].dropna()
 X = add_constant(reg_df["Nifty_%Change"])
 y = reg_df["ICICI_%Change"]
@@ -122,10 +112,8 @@ alpha, beta = model.params
 st.write(f"Sharpe Ratio: {sharpe:.3f}, Sortino Ratio: {sortino:.3f}")
 st.write(f"Alpha: {alpha:.4f}, Beta: {beta:.3f}")
 
-fig2 = px.scatter(
-    reg_df, x="Nifty_%Change", y="ICICI_%Change",
-    trendline="ols", title="Regression: ICICI vs Nifty"
-)
+fig2 = px.scatter(reg_df, x="Nifty_%Change", y="ICICI_%Change",
+                  trendline="ols", title="Regression: ICICI vs Nifty")
 st.plotly_chart(fig2, use_container_width=True)
 
 # ==========================
@@ -134,7 +122,6 @@ st.plotly_chart(fig2, use_container_width=True)
 st.header("3️⃣ Value at Risk (VaR)")
 
 conf = st.slider("Confidence Level", 0.90, 0.99, 0.95)
-
 hist_var = historical_var(df["ICICI_%Change"].dropna(), conf)
 param_var = parametric_var(df["ICICI_%Change"].dropna(), conf)
 mc_var = monte_carlo_var(df["ICICI_Price"].iloc[-1],
@@ -173,9 +160,8 @@ alm_file = st.file_uploader("Upload ALM Maturity Pattern CSV", type=["csv"])
 if alm_file:
     alm_df = pd.read_csv(alm_file)
     st.dataframe(alm_df)
-
-    RSA = alm_df.loc[alm_df["Type"]=="Asset", "Amount"].sum()
-    RSL = alm_df.loc[alm_df["Type"]=="Liability", "Amount"].sum()
+    RSA = alm_df.loc[alm_df["Type"] == "Asset", "Amount"].sum()
+    RSL = alm_df.loc[alm_df["Type"] == "Liability", "Amount"].sum()
     st.write(f"Rate Sensitive Assets: {RSA}, Rate Sensitive Liabilities: {RSL}")
 
 # ==========================
@@ -186,8 +172,9 @@ st.header("6️⃣ Portfolio Simulation")
 sims = np.random.normal(df["ICICI_%Change"].mean(),
                         df["ICICI_%Change"].std(),
                         10000)
-
-fig3 = px.histogram(sims, nbins=50, title="Monte Carlo Portfolio Returns")
+sim_df = pd.DataFrame(sims, columns=["Simulated Returns"])
+fig3 = px.histogram(sim_df, x="Simulated Returns", nbins=50,
+                    title="Monte Carlo Portfolio Returns")
 st.plotly_chart(fig3, use_container_width=True)
 
 # ==========================
@@ -197,5 +184,6 @@ st.header("7️⃣ Download Options")
 
 output = io.BytesIO()
 df.to_excel(output)
-st.download_button("Download Processed Data", data=output.getvalue(),
+st.download_button("Download Processed Data",
+                   data=output.getvalue(),
                    file_name="processed_icici.xlsx")
