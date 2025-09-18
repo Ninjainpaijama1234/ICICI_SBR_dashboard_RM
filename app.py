@@ -72,6 +72,8 @@ def parametric_var(returns, conf=0.95):
     return mu - sigma * norm.ppf(conf)
 
 def monte_carlo_var(S0, mu, sigma, T, n=10000, conf=0.95):
+    """Lognormal one-step approximation (kept for VaR section).
+       Simulation section uses full GBM paths with compounding."""
     try:
         S0 = float(S0); mu = float(mu); sigma = float(sigma); T = float(T)
         if S0 <= 0 or sigma < 0 or T <= 0 or n <= 10:
@@ -283,32 +285,63 @@ if alm_file:
         st.info("ALM CSV must contain columns: Type, Amount (case-insensitive).")
 
 # ==========================
-# 6. Portfolio Simulation
+# 6. Portfolio Simulation (GBM, horizon-aware)
 # ==========================
 st.header("6️⃣ Portfolio Simulation")
-mu_sim = safe_mean(df["ICICI_%Change"])
-sigma_sim = safe_std(df["ICICI_%Change"])
-n_sims = st.slider("Number of simulations", 1000, 50000, 10000, step=1000)
 
-if not np.isnan(mu_sim) and not np.isnan(sigma_sim) and sigma_sim >= 0:
-    sims = np.random.normal(mu_sim, sigma_sim, n_sims)
-    sim_df = pd.DataFrame({"Simulated Returns": sims})
-    fig3 = px.histogram(sim_df, x="Simulated Returns", nbins=50, title="Monte Carlo Portfolio Returns (daily)")
+# Daily drift/vol from data
+mu_daily  = safe_mean(df["ICICI_%Change"])
+sig_daily = safe_std(df["ICICI_%Change"])
 
-    # 🔎 Overlay selected-confidence daily Parametric VaR as a vertical line
-    if not np.isnan(param_var_val):
-        fig3.add_vline(
-            x=float(param_var_val),
-            line_dash="dash",
-            line_color="red",
-            annotation_text=f"VaR {int(conf*100)}%",
-            annotation_position="top right"
-        )
-
-    st.plotly_chart(fig3, use_container_width=True)
-    st.write(f"**Probability of loss (daily):** {(sim_df['Simulated Returns'] < 0).mean():.2%}")
-else:
+if np.isnan(mu_daily) or np.isnan(sig_daily) or sig_daily < 0:
     st.info("Insufficient data to simulate returns.")
+else:
+    # Controls
+    n_sims  = st.slider("Number of simulations", 1000, 100_000, 10_000, step=1000)
+    steps_y = int(np.ceil(252 * time_horizon))  # trading steps over horizon
+    seed_on = st.checkbox("Set random seed (reproducible)", value=False)
+    if seed_on:
+        seed_val = st.number_input("Seed", min_value=0, value=42, step=1)
+        np.random.seed(int(seed_val))
+
+    # GBM with daily parameters: dlnS = (mu - 0.5*sig^2)dt + sig*sqrt(dt)*Z
+    dt = 1.0 / 252.0
+    drift = (mu_daily - 0.5 * (sig_daily ** 2)) * dt
+    diff  = sig_daily * np.sqrt(dt)
+
+    # Simulate terminal compounded log-returns over the horizon
+    Z = np.random.randn(n_sims, steps_y)
+    log_growth = drift * steps_y + diff * Z.sum(axis=1)
+    term_returns = np.exp(log_growth) - 1.0  # terminal simple return over the horizon
+
+    # Summary stats
+    prob_loss = float((term_returns < 0).mean())
+    mean_ret  = float(np.mean(term_returns))
+    p5, p50, p95 = np.percentile(term_returns, [5, 50, 95])
+
+    # Horizon VaR from the simulated distribution (consistent with sidebar confidence)
+    var_horizon = np.percentile(term_returns, (1 - conf) * 100)
+
+    # Plot terminal return distribution with VaR overlay
+    sim_df = pd.DataFrame({"Terminal Return": term_returns})
+    fig3 = px.histogram(sim_df, x="Terminal Return", nbins=60,
+                        title=f"Monte Carlo Terminal Return Distribution (Horizon = {time_horizon:.2f} years, {n_sims} paths)")
+    fig3.add_vline(
+        x=float(var_horizon),
+        line_dash="dash",
+        line_color="red",
+        annotation_text=f"VaR {int(conf*100)}%",
+        annotation_position="top right"
+    )
+    st.plotly_chart(fig3, use_container_width=True)
+
+    # Horizon metrics (returns & amounts)
+    st.write(f"**Confidence:** {int(conf*100)}%")
+    st.write(f"**Probability of Loss over horizon:** {prob_loss:.2%}")
+    st.write(f"**Mean Terminal Return:** {mean_ret:.2%} | **Median:** {p50:.2%} | **5th pct:** {p5:.2%} | **95th pct:** {p95:.2%}")
+    if notional and not np.isnan(notional):
+        st.write(f"**VaR (amount, horizon):** {notional * var_horizon:,.2f}")
+        st.write(f"**Mean P&L (amount, horizon):** {notional * mean_ret:,.2f}")
 
 # ==========================
 # 7. Download Results
