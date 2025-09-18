@@ -270,19 +270,100 @@ st.write(
 )
 
 # ==========================
-# 5. ALM Analysis (basic RSA/RSL)
+# 5. Asset Liability Management (ALM)
 # ==========================
 st.header("5️⃣ Asset Liability Management (ALM)")
-alm_file = st.file_uploader("Upload ALM Maturity Pattern CSV", type=["csv"])
-if alm_file:
-    alm_df = pd.read_csv(alm_file)
-    st.dataframe(alm_df)
-    if set(["Type", "Amount"]).issubset(alm_df.columns):
-        RSA = pd.to_numeric(alm_df.loc[alm_df["Type"].str.lower()=="asset", "Amount"], errors="coerce").sum()
-        RSL = pd.to_numeric(alm_df.loc[alm_df["Type"].str.lower()=="liability", "Amount"], errors="coerce").sum()
-        st.write(f"**Rate Sensitive Assets (RSA):** {RSA:,.2f} | **Rate Sensitive Liabilities (RSL):** {RSL:,.2f}")
-    else:
-        st.info("ALM CSV must contain columns: Type, Amount (case-insensitive).")
+
+# ---- A) Direct-input ALM: Duration Gap & Equity Shock ----
+with st.expander("Direct ALM Inputs → Equity Shock", expanded=True):
+    colA, colB, colC = st.columns(3)
+
+    with colA:
+        A = st.number_input(
+            "Total Rate-Sensitive Assets A",
+            min_value=0.0, value=1_000_000_000.0, step=1_000_000.0, format="%.2f"
+        )
+        DA = st.number_input(
+            "Duration of Assets DA (years)",
+            min_value=0.0, value=2.0, step=0.1, format="%.2f"
+        )
+        CA = st.number_input(
+            "Convexity of Assets CA (optional)",
+            min_value=0.0, value=0.0, step=0.1, format="%.4f"
+        )
+
+    with colB:
+        L = st.number_input(
+            "Total Rate-Sensitive Liabilities L",
+            min_value=0.0, value=900_000_000.0, step=1_000_000.0, format="%.2f"
+        )
+        DL = st.number_input(
+            "Duration of Liabilities DL (years)",
+            min_value=0.0, value=1.5, step=0.1, format="%.2f"
+        )
+        CL = st.number_input(
+            "Convexity of Liabilities CL (optional)",
+            min_value=0.0, value=0.0, step=0.1, format="%.4f"
+        )
+
+    with colC:
+        shock_mode = st.radio("Shock Input", ["Basis Points (bps)", "Percent (%)"], horizontal=True)
+        shock_val = st.number_input("Parallel Yield Shock", value=100.0, step=25.0, format="%.2f")
+        dy = shock_val/10000.0 if shock_mode == "Basis Points (bps)" else shock_val/100.0
+
+    # Core ALM math
+    E = A - L
+    A_safe = A if A > 0 else np.nan
+    L_over_A = L / A_safe if (A_safe is not np.nan and A_safe != 0) else np.nan
+    DG = DA - (DL * L_over_A) if not np.isnan(L_over_A) else np.nan  # Duration Gap
+
+    # Linear duration impact and optional convexity
+    dE_linear = - DG * A * dy if not (np.isnan(DG) or np.isnan(dy)) else np.nan
+    dE_conv = 0.5 * ((CA * A) - (CL * L)) * (dy**2) if (CA > 0 or CL > 0) else 0.0
+    dE_total = (0.0 if np.isnan(dE_linear) else dE_linear) + dE_conv
+
+    shock_pct = (dE_total / E * 100.0) if E != 0 else np.nan
+
+    st.markdown(
+        "**Formulas**  \n"
+        "Duration Gap: **DG = DA − DL × (L/A)**  \n"
+        "ΔE (linear): **− DG × A × Δy**  \n"
+        "ΔE (with convexity): **− DG × A × Δy + 0.5 × (CA×A − CL×L) × Δy²**"
+    )
+
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("Equity E = A − L", f"{E:,.2f}")
+        st.metric("Duration of Assets (DA)", f"{DA:.2f} years")
+    with m2:
+        st.metric("Duration of Liabs (DL)", f"{DL:.2f} years")
+        st.metric("Duration Gap (DG)", f"{DG:.4f}" if not np.isnan(DG) else "—")
+    with m3:
+        st.metric("Yield Shock Δy", f"{dy:.4%}")
+        st.metric("Equity Shock (%)", f"{shock_pct:.2f}%" if not np.isnan(shock_pct) else "—")
+
+    st.write(
+        f"**ΔE (amount):** {dE_total:,.2f}  |  "
+        f"**Linear component:** {0.0 if np.isnan(dE_linear) else dE_linear:,.2f}  |  "
+        f"**Convexity add-on:** {dE_conv:,.2f}"
+    )
+
+# ---- B) Optional: Upload Maturity Pattern CSV (RSA/RSL) ----
+with st.expander("Upload ALM Maturity Pattern CSV (optional)"):
+    st.caption("Minimum columns required: **Type** ∈ {Asset, Liability}, **Amount** (numeric). Optional: Bucket, Midpoint_Years.")
+    alm_file = st.file_uploader("Upload CSV", type=["csv"])
+    if alm_file:
+        alm_df = pd.read_csv(alm_file)
+        st.dataframe(alm_df)
+        cols_norm = {c.strip().lower(): c for c in alm_df.columns}
+        if "type" in cols_norm and "amount" in cols_norm:
+            type_col = cols_norm["type"]
+            amt_col = cols_norm["amount"]
+            RSA = pd.to_numeric(alm_df.loc[alm_df[type_col].str.lower()=="asset", amt_col], errors="coerce").sum()
+            RSL = pd.to_numeric(alm_df.loc[alm_df[type_col].str.lower()=="liability", amt_col], errors="coerce").sum()
+            st.write(f"**Rate Sensitive Assets (RSA):** {RSA:,.2f} | **Rate Sensitive Liabilities (RSL):** {RSL:,.2f}")
+        else:
+            st.info("CSV must include columns: Type, Amount.")
 
 # ==========================
 # 6. Portfolio Simulation (GBM, horizon-aware)
