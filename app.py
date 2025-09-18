@@ -68,11 +68,10 @@ def parametric_var(returns, conf=0.95):
     mu, sigma = r.mean(), r.std(ddof=1)
     if np.isnan(mu) or np.isnan(sigma):
         return np.nan
-    # lower-tail threshold at the chosen confidence
     return mu - sigma * norm.ppf(conf)
 
 def monte_carlo_var(S0, mu, sigma, T, n=10000, conf=0.95):
-    """Lognormal one-step approximation (kept for VaR section).
+    """One-step lognormal approximation for VaR section (kept).
        Simulation section uses full GBM paths with compounding."""
     try:
         S0 = float(S0); mu = float(mu); sigma = float(sigma); T = float(T)
@@ -98,7 +97,6 @@ uploaded_file = st.file_uploader("Upload ICICI Dashboard Excel", type=["xlsx"])
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
 else:
-    # Fallback to local file name provided by you
     df = pd.read_excel("icici dashboard data.xlsx")
 
 # Expecting 5 columns: Date, ICICI_Price, ICICI_Return, Nifty_Price, Nifty_Return
@@ -131,7 +129,7 @@ risk_free = st.sidebar.slider("Risk-Free Rate (%)", 0.0, 10.0, 5.0) / 100.0
 volatility_ui = st.sidebar.slider("Volatility (%)", 0.0, 100.0, 30.0) / 100.0
 time_horizon = st.sidebar.slider("Time Horizon (Years)", 0.1, 5.0, 1.0)
 
-# 🔒 Global VaR confidence used everywhere
+# Global VaR confidence
 conf = st.sidebar.select_slider(
     "VaR Confidence Level",
     options=[0.90, 0.95, 0.99],
@@ -144,31 +142,18 @@ conf = st.sidebar.select_slider(
 # ==========================
 st.header("1️⃣ Performance Analysis")
 
-# If returns not provided, compute from price; otherwise prefer provided columns
-if "ICICI_Return" in df and df["ICICI_Return"].notna().any():
-    icici_ret = pd.to_numeric(df["ICICI_Return"], errors="coerce")
-else:
-    icici_ret = pd.to_numeric(df["ICICI_Price"], errors="coerce").pct_change()
-
-if "Nifty_Return" in df and df["Nifty_Return"].notna().any():
-    nifty_ret = pd.to_numeric(df["Nifty_Return"], errors="coerce")
-else:
-    nifty_ret = pd.to_numeric(df["Nifty_Price"], errors="coerce").pct_change()
+icici_ret = pd.to_numeric(df["ICICI_Return"], errors="coerce") if df["ICICI_Return"].notna().any() \
+            else pd.to_numeric(df["ICICI_Price"], errors="coerce").pct_change()
+nifty_ret  = pd.to_numeric(df["Nifty_Return"], errors="coerce") if df["Nifty_Return"].notna().any() \
+            else pd.to_numeric(df["Nifty_Price"], errors="coerce").pct_change()
 
 df["ICICI_%Change"] = icici_ret
 df["Nifty_%Change"] = nifty_ret
 
-# Price chart
 df_reset = df.reset_index()
-fig1 = px.line(
-    df_reset,
-    x="Date",
-    y=["ICICI_Price", "Nifty_Price"],
-    title="ICICI vs Nifty Prices"
-)
+fig1 = px.line(df_reset, x="Date", y=["ICICI_Price", "Nifty_Price"], title="ICICI vs Nifty Prices")
 st.plotly_chart(fig1, use_container_width=True)
 
-# Cumulative returns
 cum_df = pd.DataFrame({
     "Date": df_reset["Date"],
     "ICICI_CumRet": (1 + df["ICICI_%Change"].fillna(0)).cumprod().values - 1,
@@ -177,7 +162,6 @@ cum_df = pd.DataFrame({
 fig_cum = px.line(cum_df, x="Date", y=["ICICI_CumRet", "Nifty_CumRet"], title="Cumulative Returns")
 st.plotly_chart(fig_cum, use_container_width=True)
 
-# Summary stats
 stats_tbl = df[["ICICI_%Change", "Nifty_%Change"]].agg(["mean", "var", "std"])
 st.write("**Return Stats (daily):**")
 st.dataframe(stats_tbl)
@@ -187,7 +171,6 @@ st.dataframe(stats_tbl)
 # ==========================
 st.header("2️⃣ Risk-Return Analysis")
 
-# Sharpe & Sortino (annualized)
 rf_daily = risk_free / 252.0
 excess = (df["ICICI_%Change"] - rf_daily).dropna().values
 downside = (df["ICICI_%Change"][df["ICICI_%Change"] < 0] - rf_daily).dropna().values
@@ -199,7 +182,6 @@ down_std = safe_std(downside)
 sharpe = np.sqrt(252.0) * safe_div(excess_mean, excess_std)
 sortino = np.sqrt(252.0) * safe_div(excess_mean, down_std)
 
-# Beta & Alpha
 reg_df = df[["ICICI_%Change", "Nifty_%Change"]].dropna()
 alpha = beta = np.nan
 if not reg_df.empty and reg_df["Nifty_%Change"].nunique() > 1:
@@ -208,15 +190,13 @@ if not reg_df.empty and reg_df["Nifty_%Change"].nunique() > 1:
     try:
         model = OLS(y, X).fit()
         params = model.params
-        alpha = float(params[0])
-        beta = float(params[1])
+        alpha = float(params[0]); beta = float(params[1])
     except Exception as e:
         st.warning(f"Regression failed safely: {e}")
 
 st.write(f"**Sharpe Ratio:** {sharpe:.3f} | **Sortino Ratio:** {sortino:.3f}")
 st.write(f"**Alpha:** {alpha:.6f} | **Beta:** {beta:.4f}")
 
-# Regression scatter
 if not reg_df.empty:
     fig2 = px.scatter(reg_df.reset_index(), x="Nifty_%Change", y="ICICI_%Change",
                       trendline="ols", title="Regression: ICICI vs Nifty (daily returns)")
@@ -274,54 +254,49 @@ st.write(
 # ==========================
 st.header("5️⃣ Asset Liability Management (ALM)")
 
-# ---- A) Direct-input ALM: Duration Gap & Equity Shock ----
-with st.expander("Direct ALM Inputs → Equity Shock", expanded=True):
+tab_direct, tab_csv = st.tabs(["🧮 Direct Input (Equity Shock)", "📤 Upload CSV (RSA/RSL + Auto-Durations)"])
+
+with tab_direct:
     colA, colB, colC = st.columns(3)
 
     with colA:
-        A = st.number_input(
-            "Total Rate-Sensitive Assets A",
-            min_value=0.0, value=1_000_000_000.0, step=1_000_000.0, format="%.2f"
-        )
-        DA = st.number_input(
-            "Duration of Assets DA (years)",
-            min_value=0.0, value=2.0, step=0.1, format="%.2f"
-        )
-        CA = st.number_input(
-            "Convexity of Assets CA (optional)",
-            min_value=0.0, value=0.0, step=0.1, format="%.4f"
-        )
+        A = st.number_input("Total Rate-Sensitive Assets A",
+                            min_value=0.0, value=st.session_state.get("alm_A", 1_000_000_000.0),
+                            step=1_000_000.0, format="%.2f", key="alm_A_input")
+        DA = st.number_input("Duration of Assets DA (years)",
+                             min_value=0.0, value=st.session_state.get("alm_DA", 2.0),
+                             step=0.1, format="%.2f", key="alm_DA_input")
+        CA = st.number_input("Convexity of Assets CA (optional)",
+                             min_value=0.0, value=st.session_state.get("alm_CA", 0.0),
+                             step=0.1, format="%.4f", key="alm_CA_input")
 
     with colB:
-        L = st.number_input(
-            "Total Rate-Sensitive Liabilities L",
-            min_value=0.0, value=900_000_000.0, step=1_000_000.0, format="%.2f"
-        )
-        DL = st.number_input(
-            "Duration of Liabilities DL (years)",
-            min_value=0.0, value=1.5, step=0.1, format="%.2f"
-        )
-        CL = st.number_input(
-            "Convexity of Liabilities CL (optional)",
-            min_value=0.0, value=0.0, step=0.1, format="%.4f"
-        )
+        L = st.number_input("Total Rate-Sensitive Liabilities L",
+                            min_value=0.0, value=st.session_state.get("alm_L", 900_000_000.0),
+                            step=1_000_000.0, format="%.2f", key="alm_L_input")
+        DL = st.number_input("Duration of Liabilities DL (years)",
+                             min_value=0.0, value=st.session_state.get("alm_DL", 1.5),
+                             step=0.1, format="%.2f", key="alm_DL_input")
+        CL = st.number_input("Convexity of Liabilities CL (optional)",
+                             min_value=0.0, value=st.session_state.get("alm_CL", 0.0),
+                             step=0.1, format="%.4f", key="alm_CL_input")
 
     with colC:
-        shock_mode = st.radio("Shock Input", ["Basis Points (bps)", "Percent (%)"], horizontal=True)
-        shock_val = st.number_input("Parallel Yield Shock", value=100.0, step=25.0, format="%.2f")
+        shock_mode = st.radio("Shock Input", ["Basis Points (bps)", "Percent (%)"],
+                              horizontal=True, key="alm_mode")
+        shock_val = st.number_input("Parallel Yield Shock", value=100.0, step=25.0,
+                                    format="%.2f", key="alm_shock")
         dy = shock_val/10000.0 if shock_mode == "Basis Points (bps)" else shock_val/100.0
 
     # Core ALM math
     E = A - L
     A_safe = A if A > 0 else np.nan
-    L_over_A = L / A_safe if (A_safe is not np.nan and A_safe != 0) else np.nan
-    DG = DA - (DL * L_over_A) if not np.isnan(L_over_A) else np.nan  # Duration Gap
+    L_over_A = (L / A_safe) if (A_safe and not np.isnan(A_safe)) else np.nan
+    DG = DA - (DL * L_over_A) if not np.isnan(L_over_A) else np.nan
 
-    # Linear duration impact and optional convexity
     dE_linear = - DG * A * dy if not (np.isnan(DG) or np.isnan(dy)) else np.nan
     dE_conv = 0.5 * ((CA * A) - (CL * L)) * (dy**2) if (CA > 0 or CL > 0) else 0.0
     dE_total = (0.0 if np.isnan(dE_linear) else dE_linear) + dE_conv
-
     shock_pct = (dE_total / E * 100.0) if E != 0 else np.nan
 
     st.markdown(
@@ -348,75 +323,121 @@ with st.expander("Direct ALM Inputs → Equity Shock", expanded=True):
         f"**Convexity add-on:** {dE_conv:,.2f}"
     )
 
-# ---- B) Optional: Upload Maturity Pattern CSV (RSA/RSL) ----
-with st.expander("Upload ALM Maturity Pattern CSV (optional)"):
-    st.caption("Minimum columns required: **Type** ∈ {Asset, Liability}, **Amount** (numeric). Optional: Bucket, Midpoint_Years.")
-    alm_file = st.file_uploader("Upload CSV", type=["csv"])
+    # -------- ΔEVE sweep: Equity Shock % vs Δy ----------
+    st.subheader("ΔEVE Sensitivity: Equity Shock vs Yield Shift")
+    step_bps = st.select_slider("Shock grid resolution (bps)", options=[10, 25, 50, 100], value=25)
+    shocks_bps = np.arange(-300, 300 + step_bps, step_bps, dtype=int)
+    dy_vec = shocks_bps / 10000.0
+
+    if not np.isnan(DG) and E != 0 and not np.isnan(E):
+        dE_linear_vec = -DG * A * dy_vec
+        dE_conv_vec = 0.5 * ((CA * A) - (CL * L)) * (dy_vec ** 2) if (CA > 0 or CL > 0) else 0.0
+        dE_total_vec = dE_linear_vec + dE_conv_vec
+        eq_shock_pct_vec = (dE_total_vec / E) * 100.0
+
+        sens_df = pd.DataFrame({
+            "Shock_bps": shocks_bps,
+            "Delta_y": dy_vec,
+            "DeltaE_amount": dE_total_vec,
+            "EquityShock_pct": eq_shock_pct_vec
+        })
+
+        st.dataframe(sens_df.style.format({
+            "Delta_y": "{:.4%}",
+            "DeltaE_amount": "{:,.2f}",
+            "EquityShock_pct": "{:.2f}"
+        }), use_container_width=True)
+
+        fig_sens = px.line(
+            sens_df, x="Shock_bps", y="EquityShock_pct",
+            title="Equity Shock % vs Parallel Yield Shift (bps)"
+        )
+        fig_sens.update_traces(mode="lines+markers")
+        st.plotly_chart(fig_sens, use_container_width=True)
+    else:
+        st.info("Provide valid A, L, DA, DL (and ensure A ≠ 0) to run the sensitivity sweep.")
+
+with tab_csv:
+    st.caption("Minimum columns: **Type** ∈ {Asset, Liability}, **Amount** (numeric). Optional: **Midpoint_Years** for duration.")
+    alm_file = st.file_uploader("Upload CSV", type=["csv"], key="alm_csv")
     if alm_file:
         alm_df = pd.read_csv(alm_file)
         st.dataframe(alm_df)
         cols_norm = {c.strip().lower(): c for c in alm_df.columns}
+
         if "type" in cols_norm and "amount" in cols_norm:
-            type_col = cols_norm["type"]
-            amt_col = cols_norm["amount"]
-            RSA = pd.to_numeric(alm_df.loc[alm_df[type_col].str.lower()=="asset", amt_col], errors="coerce").sum()
-            RSL = pd.to_numeric(alm_df.loc[alm_df[type_col].str.lower()=="liability", amt_col], errors="coerce").sum()
-            st.write(f"**Rate Sensitive Assets (RSA):** {RSA:,.2f} | **Rate Sensitive Liabilities (RSL):** {RSL:,.2f}")
+            type_col = cols_norm["type"]; amt_col = cols_norm["amount"]
+            assets = pd.to_numeric(alm_df.loc[alm_df[type_col].str.lower()=="asset", amt_col], errors="coerce")
+            liabs  = pd.to_numeric(alm_df.loc[alm_df[type_col].str.lower()=="liability", amt_col], errors="coerce")
+            A_csv = float(assets.sum(skipna=True)) if not assets.empty else np.nan
+            L_csv = float(liabs.sum(skipna=True)) if not liabs.empty else np.nan
+
+            DA_csv = DL_csv = np.nan
+            if "midpoint_years" in cols_norm:
+                t_col = cols_norm["midpoint_years"]
+                a_df = alm_df.loc[alm_df[type_col].str.lower()=="asset", [t_col, amt_col]].copy()
+                a_df[amt_col] = pd.to_numeric(a_df[amt_col], errors="coerce")
+                a_df[t_col]   = pd.to_numeric(a_df[t_col], errors="coerce")
+                if not a_df[amt_col].dropna().empty and a_df[amt_col].sum(skipna=True) > 0:
+                    DA_csv = float((a_df[t_col] * a_df[amt_col]).sum(skipna=True) / a_df[amt_col].sum(skipna=True))
+
+                l_df = alm_df.loc[alm_df[type_col].str.lower()=="liability", [t_col, amt_col]].copy()
+                l_df[amt_col] = pd.to_numeric(l_df[amt_col], errors="coerce")
+                l_df[t_col]   = pd.to_numeric(l_df[t_col], errors="coerce")
+                if not l_df[amt_col].dropna().empty and l_df[amt_col].sum(skipna=True) > 0:
+                    DL_csv = float((l_df[t_col] * l_df[amt_col]).sum(skipna=True) / l_df[amt_col].sum(skipna=True))
+
+            st.write(f"**RSA (A):** {A_csv:,.2f} | **RSL (L):** {L_csv:,.2f}")
+            st.write(f"**Estimated DA (years):** {DA_csv:.4f}" if not np.isnan(DA_csv) else "**Estimated DA:** —")
+            st.write(f"**Estimated DL (years):** {DL_csv:.4f}" if not np.isnan(DL_csv) else "**Estimated DL:** —")
+
+            if st.button("Use these in Direct Input", type="primary"):
+                if not np.isnan(A_csv): st.session_state["alm_A"] = A_csv
+                if not np.isnan(L_csv): st.session_state["alm_L"] = L_csv
+                if not np.isnan(DA_csv): st.session_state["alm_DA"] = DA_csv
+                if not np.isnan(DL_csv): st.session_state["alm_DL"] = DL_csv
+                st.success("Loaded into Direct Input. Go to the '🧮 Direct Input (Equity Shock)' tab.")
         else:
-            st.info("CSV must include columns: Type, Amount.")
+            st.info("CSV must include columns: Type, Amount. (Optional: Midpoint_Years).")
 
 # ==========================
 # 6. Portfolio Simulation (GBM, horizon-aware)
 # ==========================
 st.header("6️⃣ Portfolio Simulation")
 
-# Daily drift/vol from data
 mu_daily  = safe_mean(df["ICICI_%Change"])
 sig_daily = safe_std(df["ICICI_%Change"])
 
 if np.isnan(mu_daily) or np.isnan(sig_daily) or sig_daily < 0:
     st.info("Insufficient data to simulate returns.")
 else:
-    # Controls
     n_sims  = st.slider("Number of simulations", 1000, 100_000, 10_000, step=1000)
-    steps_y = int(np.ceil(252 * time_horizon))  # trading steps over horizon
+    steps_y = int(np.ceil(252 * time_horizon))
     seed_on = st.checkbox("Set random seed (reproducible)", value=False)
     if seed_on:
         seed_val = st.number_input("Seed", min_value=0, value=42, step=1)
         np.random.seed(int(seed_val))
 
-    # GBM with daily parameters: dlnS = (mu - 0.5*sig^2)dt + sig*sqrt(dt)*Z
     dt = 1.0 / 252.0
     drift = (mu_daily - 0.5 * (sig_daily ** 2)) * dt
     diff  = sig_daily * np.sqrt(dt)
 
-    # Simulate terminal compounded log-returns over the horizon
     Z = np.random.randn(n_sims, steps_y)
     log_growth = drift * steps_y + diff * Z.sum(axis=1)
-    term_returns = np.exp(log_growth) - 1.0  # terminal simple return over the horizon
+    term_returns = np.exp(log_growth) - 1.0
 
-    # Summary stats
     prob_loss = float((term_returns < 0).mean())
     mean_ret  = float(np.mean(term_returns))
     p5, p50, p95 = np.percentile(term_returns, [5, 50, 95])
-
-    # Horizon VaR from the simulated distribution (consistent with sidebar confidence)
     var_horizon = np.percentile(term_returns, (1 - conf) * 100)
 
-    # Plot terminal return distribution with VaR overlay
     sim_df = pd.DataFrame({"Terminal Return": term_returns})
     fig3 = px.histogram(sim_df, x="Terminal Return", nbins=60,
                         title=f"Monte Carlo Terminal Return Distribution (Horizon = {time_horizon:.2f} years, {n_sims} paths)")
-    fig3.add_vline(
-        x=float(var_horizon),
-        line_dash="dash",
-        line_color="red",
-        annotation_text=f"VaR {int(conf*100)}%",
-        annotation_position="top right"
-    )
+    fig3.add_vline(x=float(var_horizon), line_dash="dash", line_color="red",
+                   annotation_text=f"VaR {int(conf*100)}%", annotation_position="top right")
     st.plotly_chart(fig3, use_container_width=True)
 
-    # Horizon metrics (returns & amounts)
     st.write(f"**Confidence:** {int(conf*100)}%")
     st.write(f"**Probability of Loss over horizon:** {prob_loss:.2%}")
     st.write(f"**Mean Terminal Return:** {mean_ret:.2%} | **Median:** {p50:.2%} | **5th pct:** {p5:.2%} | **95th pct:** {p95:.2%}")
